@@ -10,6 +10,8 @@ The project is designed as a modular framework where each agent exposes a differ
 
 ---
 
+https://github.com/user-attachments/assets/c1e4efb4-2c4c-4adb-94e1-c80db0c2d414
+
 ---
 
 # Features
