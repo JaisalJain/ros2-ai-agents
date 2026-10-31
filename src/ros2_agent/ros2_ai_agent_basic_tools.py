@@ -17,24 +17,22 @@ Methods:
 
 Dependencies:
     - std_msgs.msg (String)
-    - rclpy (rclpy, Node)
-    - ament_index_python.packages (get_package_share_directory)
-    - pathlib (Path)
+    - rclpy (Node)
     - Ollama integration: langchain_ollama, langchain
     - langchain.tools (tool)
     - subprocess
+    - ros2_agent.node_runner (run_node)
 """
 import subprocess
-from pathlib import Path
 
-import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
-from ament_index_python.packages import get_package_share_directory
 
 from langchain_ollama import ChatOllama
 from langchain.agents import create_agent
 from langchain.tools import tool
+
+from ros2_agent.node_runner import run_node
 
 
 class ROS2AIAgent(Node):
@@ -58,10 +56,6 @@ class ROS2AIAgent(Node):
         Return only the necessary information and results. e.g
         Human: Show me all running nodes
         AI: Here are the running ROS 2 nodes: [node list]"""
-
-        #share_dir = get_package_share_directory('ros2_agent')
-        #config_dir = share_dir + '/config' + '/openai.env'
-        #load_dotenv(Path(config_dir))
 
         # setup the toolkit with the decorated class methods
         self.toolkit = [
@@ -137,14 +131,7 @@ class ROS2AIAgent(Node):
 
 
 def main(args=None):
-    rclpy.init(args=args)
-    node = ROS2AIAgent()
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.destroy_node()
+    run_node(ROS2AIAgent, args)
 
 
 if __name__ == '__main__':

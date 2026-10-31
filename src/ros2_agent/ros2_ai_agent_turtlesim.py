@@ -11,35 +11,39 @@ Functions:
     move_forward(distance: float) -> str: Moves the turtle forward by the specified distance.
     rotate(angle: float) -> str: Rotates the turtle by the specified angle in degrees.
     get_pose() -> str: Gets the current position and orientation of the turtle.
+    publish_motion(msg: Twist): Publishes a velocity command and waits until turtlesim has finished it.
     pose_callback(msg: Pose): Callback function to update the turtle's pose.
     prompt_callback(msg: String): Callback function to process incoming messages.
     main(args=None): Initializes and spins the ROS2 node.
 
 Dependencies:
-    - math
+    - math, threading, time
     - geometry_msgs.msg (Twist)
     - turtlesim.msg (Pose)
     - std_msgs.msg (String)
-    - rclpy (rclpy, Node)
-    - ament_index_python.packages (get_package_share_directory)
-    - pathlib (Path)
+    - rclpy (Node)
     - Ollama integration: langchain_ollama, langchain
     - langchain.tools (tool)
+    - ros2_agent.node_runner (prompt_worker, run_node)
 """
 
 import math
-from pathlib import Path
+import threading
+import time
 
-import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 from geometry_msgs.msg import Twist
 from turtlesim.msg import Pose
-from ament_index_python.packages import get_package_share_directory
 
 from langchain_ollama import ChatOllama
 from langchain.agents import create_agent
 from langchain.tools import tool
+
+from ros2_agent.node_runner import prompt_worker, run_node
+
+# turtlesim applies each velocity command for 1 second and then stops the turtle.
+COMMAND_DURATION = 1.0
 
 
 class ROS2AIAgent(Node):
@@ -49,6 +53,10 @@ class ROS2AIAgent(Node):
         
         # Initialize turtle pose
         self.turtle_pose = Pose()
+
+        # Run one motion command at a time, so tool calls made in the same step
+        # don't overwrite each other
+        self.motion_lock = threading.Lock()
         
         # Create publisher for turtle commands
         self.cmd_vel_pub = self.create_publisher(Twist, '/turtle1/cmd_vel', 10)
@@ -64,25 +72,19 @@ class ROS2AIAgent(Node):
         # setup the tools as class methods
         @tool
         def move_forward(distance: float) -> str:
-            """Move turtle forward by specified distance."""
+            """Move turtle forward by specified distance (negative moves backward)."""
             msg = Twist()
-            duration = float(distance)
-
-            msg.linear.x = duration * 0.1
-            
-            # Publish for the calculated duration
-            self.cmd_vel_pub.publish(msg)
+            # The command lasts 1 second, so a speed equal to the distance covers it
+            msg.linear.x = float(distance) / COMMAND_DURATION
+            self.publish_motion(msg)
             return f"Moved forward {distance} units"
 
         @tool
         def rotate(angle: float) -> str:
             """Rotate turtle by specified angle in degrees (positive for counterclockwise)."""
             msg = Twist()
-            msg.angular.z = math.radians(float(angle))
-            duration = 1.0  # Time to complete rotation
-            
-            self.cmd_vel_pub.publish(msg)
-            self.create_timer(duration, lambda: self.cmd_vel_pub.publish(Twist()))
+            msg.angular.z = math.radians(float(angle)) / COMMAND_DURATION
+            self.publish_motion(msg)
             return f"Rotated {angle} degrees"
 
         @tool
@@ -100,10 +102,6 @@ class ROS2AIAgent(Node):
         Human: Move the turtle forward 2 units
         AI: Moving forward 2 units"""
 
-        #share_dir = get_package_share_directory('ros2_agent')
-        #config_dir = share_dir + '/config' + '/openai.env'
-        #load_dotenv(Path(config_dir))
-
         # setup the toolkit with the class methods
         self.toolkit = [move_forward, rotate, get_pose]
 
@@ -114,13 +112,20 @@ class ROS2AIAgent(Node):
         # In the modern interface, create_agent returns a self-contained runtime graph
         self.agent_executor = create_agent(self.llm, tools=self.toolkit, system_prompt=system_prompt)
 
-        # Create the subscriber for prompts
+        # Create the subscriber for prompts. Prompts run on a background thread so
+        # pose updates keep arriving while the agent is working on a prompt.
         self.subscription = self.create_subscription(
             String,
             'prompt',
-            self.prompt_callback,
+            prompt_worker(self.prompt_callback),
             10
         )
+
+    def publish_motion(self, msg):
+        """Publish a velocity command and wait until turtlesim has finished it."""
+        with self.motion_lock:
+            self.cmd_vel_pub.publish(msg)
+            time.sleep(COMMAND_DURATION + 0.2)
 
     def pose_callback(self, msg):
         """Callback to update turtle's pose"""
@@ -141,14 +146,7 @@ class ROS2AIAgent(Node):
 
 
 def main(args=None):
-    rclpy.init(args=args)
-    node = ROS2AIAgent()
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.destroy_node()
+    run_node(ROS2AIAgent, args)
 
 
 if __name__ == '__main__':

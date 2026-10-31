@@ -17,12 +17,13 @@ setup(
         #(os.path.join('lib', package_name), glob('ros2_agent/*.py')),
 
     ],
-    install_requires=['setuptools','langchain','langchain-openai'],
+    # Python packages from PyPI are installed from requirements.txt (see README)
+    install_requires=['setuptools'],
     zip_safe=True,
     maintainer='Jaisal',
     maintainer_email='jaisaljain345@gmail.com',
     description='ROS 2 AI agent',
-    license='TODO: License declaration',
+    license='MIT',
     #tests_require=['pytest'],
     entry_points={
         'console_scripts': [

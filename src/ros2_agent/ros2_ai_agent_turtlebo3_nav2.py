@@ -9,6 +9,9 @@ Classes:
 
 Functions:
     move_to_goal(x: float, y: float) -> str: Navigates the robot to specified x, y coordinates.
+    move_forward(distance: float) -> str: Navigates the robot forward by a distance from its current pose.
+    send_goal(goal_msg, description) -> str: Sends a navigation goal to Nav2.
+    goal_response_callback(future), get_result_callback(future): Log whether the goal was accepted and reached.
     get_current_pose() -> str: Retrieves the current position and orientation of the robot.
     pose_callback(msg: Odometry): Callback function to update the robot's pose.
     prompt_callback(msg: String): Callback function to process incoming messages.
@@ -20,31 +23,31 @@ Dependencies:
     - nav_msgs.msg (Odometry)
     - rclpy.action (ActionClient)
     - nav2_msgs.action (NavigateToPose)
+    - action_msgs.msg (GoalStatus)
     - std_msgs.msg (String)
-    - rclpy (rclpy, Node)
-    - ament_index_python.packages (get_package_share_directory)
-    - pathlib (Path)
+    - rclpy (Node)
     - transforms3d.euler (quat2euler)
     - Ollama integration: langchain_ollama, langchain
     - langchain.tools (tool)
+    - ros2_agent.node_runner (prompt_worker, run_node)
 """
 
 import math
-from pathlib import Path
 
-import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
+from action_msgs.msg import GoalStatus
 from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
 from nav2_msgs.action import NavigateToPose
-from ament_index_python.packages import get_package_share_directory
 
 from transforms3d.euler import quat2euler
 from langchain_ollama import ChatOllama
 from langchain.agents import create_agent
 from langchain.tools import tool
+
+from ros2_agent.node_runner import prompt_worker, run_node
 
 
 class ROS2AIAgent(Node):
@@ -68,23 +71,24 @@ class ROS2AIAgent(Node):
 
         # Create tools using class methods
         self.move_to_goal_tool = tool(self.move_to_goal)
+        self.move_forward_tool = tool(self.move_forward)
         self.get_current_pose_tool = tool(self.get_current_pose)
 
         system_prompt = """You are a TurtleBot3 control assistant.
         You can control the robot using these commands:
-        - move_to_goal(x, y): Navigate robot to specified x,y coordinates
+        - move_to_goal(x, y): Navigate robot to specified x,y coordinates in the map
+        - move_forward(distance): Move robot forward by distance in meters from where it is now (negative moves backward)
         - get_current_pose(): Get current position and orientation of robot
-        
+
+        Never guess the robot's position. For motions relative to the robot, such as
+        "move 1 meter forward", use move_forward instead of computing coordinates.
+
         Return only the necessary actions and their results. e.g
         Human: Move the robot to position x=1.0, y=2.0
         AI: Navigating to position x: 1.0, y: 2.0"""
 
-        #share_dir = get_package_share_directory('ros2_agent')
-        #config_dir = share_dir + '/config' + '/openai.env'
-        #load_dotenv(Path(config_dir))
-
         # setup the toolkit with the decorated class methods
-        self.toolkit = [self.move_to_goal_tool, self.get_current_pose_tool]
+        self.toolkit = [self.move_to_goal_tool, self.move_forward_tool, self.get_current_pose_tool]
 
         # Choose the LLM that will drive the agent
         self.llm = ChatOllama(model="qwen3:8b", temperature=0)
@@ -93,11 +97,12 @@ class ROS2AIAgent(Node):
         # In the modern interface, create_agent returns a self-contained runtime graph
         self.agent_executor = create_agent(self.llm, tools=self.toolkit, system_prompt=system_prompt)
 
-        # Create the subscriber for prompts
+        # Create the subscriber for prompts. Prompts run on a background thread so odometry
+        # and navigation results keep arriving while the agent is working on a prompt.
         self.subscription = self.create_subscription(
             String,
             'prompt',
-            self.prompt_callback,
+            prompt_worker(self.prompt_callback),
             10
         )
 
@@ -109,14 +114,45 @@ class ROS2AIAgent(Node):
         goal_msg.pose.pose.position.x = float(x)
         goal_msg.pose.pose.position.y = float(y)
         goal_msg.pose.pose.orientation.w = 1.0
-        
+        return self.send_goal(goal_msg, f"Navigating to position x: {x}, y: {y}")
+
+    def move_forward(self, distance: float) -> str:
+        """Move robot forward by distance in meters from its current pose (negative moves backward)."""
+        goal_msg = NavigateToPose.Goal()
+        # Goal in the robot's own frame: Nav2 converts it to the map frame using
+        # the latest transform (zero stamp), so it starts from the real robot pose
+        goal_msg.pose.header.frame_id = 'base_link'
+        goal_msg.pose.pose.position.x = float(distance)
+        goal_msg.pose.pose.orientation.w = 1.0
+        return self.send_goal(goal_msg, f"Moving forward {distance} meters")
+
+    def send_goal(self, goal_msg, description):
+        """Send a navigation goal and report its outcome in the log."""
         # Wait for action server
         if not self.nav_client.wait_for_server(timeout_sec=5.0):
             return "Navigation server not available"
-        
-        # Send goal
-        self.nav_client.send_goal_async(goal_msg)
-        return f"Navigating to position x: {x}, y: {y}"
+
+        self.get_logger().info(description)
+        future = self.nav_client.send_goal_async(goal_msg)
+        future.add_done_callback(self.goal_response_callback)
+        return description
+
+    def goal_response_callback(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().error('Navigation goal rejected')
+            return
+
+        self.get_logger().info('Navigation goal accepted')
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self.get_result_callback)
+
+    def get_result_callback(self, future):
+        status = future.result().status
+        if status == GoalStatus.STATUS_SUCCEEDED:
+            self.get_logger().info('Navigation goal reached')
+        else:
+            self.get_logger().error(f'Navigation failed with status: {status}')
 
     def get_current_pose(self) -> str:
         """Get current pose of the robot."""
@@ -151,14 +187,7 @@ class ROS2AIAgent(Node):
 
 
 def main(args=None):
-    rclpy.init(args=args)
-    node = ROS2AIAgent()
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.destroy_node()
+    run_node(ROS2AIAgent, args)
 
 
 if __name__ == '__main__':

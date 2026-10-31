@@ -5,7 +5,7 @@
   <version>0.0.0</version>
   <description>ROS2 AI AGENT</description>
   <maintainer email="jaisaljain345@gmail.com">jaisal</maintainer>
-  <license>TODO: License declaration</license>
+  <license>MIT</license>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
@@ -15,9 +15,19 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>turtlesim</exec_depend>
+  <exec_depend>moveit_msgs</exec_depend>
+  <exec_depend>shape_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>action_msgs</exec_depend>
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>ur_simulation_gz</exec_depend>
+  <exec_depend>python3-transforms3d</exec_depend>
 
   <depend>python3-pip</depend>
-  <depend>moveit-py</depend>
 
   <depend>nav2_msgs</depend>
   <depend>nav_msgs</depend>

@@ -6,23 +6,22 @@ The node subscribes to a topic and processes incoming messages using an AI agent
 
 Dependencies:
     - Ollama integration: langchain_ollama, langchain
-    - rclpy (rclpy, Node)
+    - rclpy (Node)
     - std_msgs.msg (String)
-    - ament_index_python.packages (get_package_share_directory)
-    - pathlib (Path)
+    - os
+    - ros2_agent.node_runner (run_node)
 """
 
 import os
-from pathlib import Path
 
-import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
-from ament_index_python.packages import get_package_share_directory
 
 from langchain_ollama import ChatOllama
 from langchain.agents import create_agent
 from langchain.tools import tool
+
+from ros2_agent.node_runner import run_node
 
 class ROS2AIAgent(Node):
     def __init__(self):
@@ -42,10 +41,6 @@ e.g Human: What ROS distribution am I using?
 AI: Current ROS distribution: humble
 Human: What is my ROS domain ID?
 AI: Current ROS domain ID: 0 """
-
-        #share_dir = get_package_share_directory('ros2_agent')
-        #config_dir = share_dir + '/config' + '/openai.env'
-        #load_dotenv(Path(config_dir))
 
         # Setup the toolkit with both tools
         self.toolkit = [self.get_ros_distro_tool, self.get_domain_id_tool]
@@ -98,15 +93,8 @@ AI: Current ROS domain ID: 0 """
             self.get_logger().error(f'Error processing prompt: {str(e)}')
 
 def main(args=None):
-    rclpy.init(args=args)
-    node = ROS2AIAgent()
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.destroy_node()
-        rclpy.try_shutdown()
+    run_node(ROS2AIAgent, args)
+
 
 if __name__ == '__main__':
     main()
