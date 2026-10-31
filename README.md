@@ -22,7 +22,7 @@ https://github.com/user-attachments/assets/c1e4efb4-2c4c-4adb-94e1-c80db0c2d414
 - ROS 2 topic, service, and action introspection
 - Turtlesim motion control
 - TurtleBot3 autonomous navigation using Nav2
-- Universal Robots (UR10e) manipulation using MoveIt 2
+- Universal Robots (UR5e) manipulation using MoveIt 2
 - Gazebo Sim integration
 - RViz visualization
 - Extensible tool-based agent architecture
@@ -38,7 +38,6 @@ https://github.com/user-attachments/assets/c1e4efb4-2c4c-4adb-94e1-c80db0c2d414
 | `launch`     | Launch files for all AI agent demonstrations |
 | `docs`       | Images and demonstration videos              |
 | `resource`   | ROS 2 package resources                      |
-| `test`       | Package tests                                |
 
 ---
 
@@ -50,7 +49,7 @@ https://github.com/user-attachments/assets/c1e4efb4-2c4c-4adb-94e1-c80db0c2d414
 | **ROS Tools Agent** | Queries ROS topics, nodes, services, and actions |
 | **Turtlesim Agent** | Controls turtlesim using natural language        |
 | **Nav2 Agent**      | Commands TurtleBot3 navigation using Nav2        |
-| **MoveIt 2 Agent**  | Controls a UR10e manipulator using MoveIt 2      |
+| **MoveIt 2 Agent**  | Controls a UR5e manipulator using MoveIt 2       |
 
 ---
 
@@ -74,14 +73,18 @@ https://github.com/user-attachments/assets/c1e4efb4-2c4c-4adb-94e1-c80db0c2d414
 
 # Prerequisites
 
-Install ROS 2 Jazzy and the required robotics packages.
+Install [ROS 2 Jazzy](https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html) on Ubuntu 24.04, then the required robotics packages.
 
 ```bash
+sudo apt update
+
 sudo apt install \
-ros-jazzy-gazebo-ros-pkgs \
+ros-dev-tools \
+python3-venv \
+python3-transforms3d \
+ros-jazzy-turtlesim \
 ros-jazzy-nav2-bringup \
 ros-jazzy-navigation2 \
-ros-jazzy-turtlebot3* \
 ros-jazzy-moveit \
 ros-jazzy-ur \
 ros-jazzy-ur-simulation-gz \
@@ -102,12 +105,24 @@ ollama pull qwen3:8b
 
 ---
 
-# Python Environment
-
-Create a virtual environment.
+# Get the Code
 
 ```bash
-python3 -m venv .venv
+git clone https://github.com/JaisalJain/ros2-ai-agents.git
+
+cd ros2-ai-agents
+```
+
+Run all of the following commands from the repository root.
+
+---
+
+# Python Environment
+
+Create a virtual environment with the system Python (the same Python 3.12 that ROS 2 Jazzy uses; deactivate conda first if you use it).
+
+```bash
+/usr/bin/python3 -m venv .venv
 
 source .venv/bin/activate
 
@@ -143,6 +158,8 @@ This script automatically:
 - Configures the Python path
 - Sources the workspace
 
+Run `source setup_env.sh` in every new terminal, including the second terminal you use to send the `ros2 topic pub` prompts below.
+
 ---
 
 # 1. Basic ROS 2 AI Agent
@@ -156,11 +173,11 @@ ros2 launch ros2_agent start_ros2_basic_agent.py
 Example prompts:
 
 ```bash
-ros2 topic pub --once /prompt std_msgs/msg/String "{data: 'What ROS
-distribution am I using?'}"
+ros2 topic pub --once /prompt std_msgs/msg/String \
+"{data: 'What ROS distribution am I using?'}"
 
-ros2 topic pub --once /prompt std_msgs/msg/String "{data: 'What is my ROS
-domain ID?'}"
+ros2 topic pub --once /prompt std_msgs/msg/String \
+"{data: 'What is my ROS domain ID?'}"
 ```
 
 ### Features
@@ -220,7 +237,7 @@ Example prompts:
 
 ```bash
 ros2 topic pub --once /prompt std_msgs/msg/String \
-"{data: 'Move the turtle forward'}"
+"{data: 'Move the turtle forward 2 units'}"
 
 ros2 topic pub --once /prompt std_msgs/msg/String \
 "{data: 'Rotate 90 degrees'}"
@@ -264,8 +281,9 @@ ros2 topic pub --once /prompt std_msgs/msg/String \
 
 - Autonomous navigation
 - Goal-based path planning
+- Relative motion (move forward or backward from the current pose)
 - Current pose retrieval
-- Nav2 Simple Commander integration
+- Nav2 `NavigateToPose` action integration
 - Gazebo simulation
 - RViz visualization
 
@@ -279,7 +297,7 @@ ros2 topic pub --once /prompt std_msgs/msg/String \
 
 # 5. AI Agent for MoveIt 2
 
-Launch the UR10e MoveIt 2 simulation together with the AI agent.
+Launch the UR5e MoveIt 2 simulation together with the AI agent.
 
 ```bash
 ros2 launch ros2_agent start_ur_moveit2_agent.py
@@ -302,6 +320,7 @@ ros2 topic pub --once /prompt std_msgs/msg/String \
 
 - Motion planning
 - Cartesian pose planning
+- Relative end-effector motion (e.g. reduce z by 0.2 m)
 - End-effector pose retrieval
 - Named target execution
 - MoveIt 2 integration
@@ -311,6 +330,8 @@ ros2 topic pub --once /prompt std_msgs/msg/String \
 ### Result
 
 ![MoveIt Agent](docs/images/ros2_moveit_agent.png)
+
+🎥 `docs/videos/moveit-agent.mp4`
 
 ---
 
@@ -322,14 +343,15 @@ ros2 topic pub --once /prompt std_msgs/msg/String \
 │   ├── ros2_agent
 │   ├── launch
 │   ├── resource
-│   ├── test
 │   ├── setup.py
-│   ├── package.xml
-│   └── requirements.txt
+│   ├── setup.cfg
+│   └── package.xml
 ├── docs
 │   ├── images
 │   └── videos
+├── requirements.txt
 ├── setup_env.sh
+├── LICENSE
 ├── README.md
 └── .gitignore
 ```

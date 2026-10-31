@@ -5,8 +5,6 @@ This script defines a ROS2 node that integrates with Ollama's language model via
 to control a UR robot using MoveIt 2.
 """
 
-import math
-from pathlib import Path
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
@@ -22,6 +20,8 @@ from tf2_ros import TransformListener, Buffer
 from langchain_ollama import ChatOllama
 from langchain.agents import create_agent
 from langchain.tools import tool
+
+from ros2_agent.node_runner import prompt_worker, run_node
 
 class ROS2AIAgent(Node):
     def __init__(self):
@@ -50,52 +50,22 @@ class ROS2AIAgent(Node):
         @tool
         def move_to_pose(x: float, y: float, z: float) -> str:
             """Move robot end effector to specified x,y,z coordinates."""
+            return self.send_pose_goal(x, y, z)
+
+        @tool
+        def move_relative(dx: float = 0.0, dy: float = 0.0, dz: float = 0.0) -> str:
+            """Move robot end effector by dx, dy, dz meters from its current position."""
             try:
-                # Create goal pose
-                goal_pose = PoseStamped()
-                goal_pose.header.frame_id = "base_link"
-                goal_pose.header.stamp = self.get_clock().now().to_msg()
-                goal_pose.pose.position = Point(x=x, y=y, z=z)
-                goal_pose.pose.orientation = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
-
-                # Create motion plan request
-                motion_request = MotionPlanRequest()
-                motion_request.workspace_parameters.header.frame_id = "base_link"
-                motion_request.workspace_parameters.header.stamp = self.get_clock().now().to_msg()
-                motion_request.group_name = "ur_manipulator"
-                motion_request.num_planning_attempts = 10
-                motion_request.allowed_planning_time = 5.0
-                motion_request.max_velocity_scaling_factor = 0.1
-                motion_request.max_acceleration_scaling_factor = 0.1
-                motion_request.goal_constraints = [self.create_pose_goal(goal_pose)]
-
-                # Create goal message
-                goal_msg = MoveGroup.Goal()
-                goal_msg.request = motion_request
-                goal_msg.planning_options.planning_scene_diff.robot_state.is_diff = True
-
-                # Send goal asynchronously
-                self.get_logger().info(f'Sending goal position: x={x}, y={y}, z={z}')
-                future = self.move_action.send_goal_async(goal_msg)
-                future.add_done_callback(self.goal_response_callback)
-                return f"Sending motion command to position x: {x}, y: {y}, z: {z}"
+                x, y, z = self.get_end_effector_position()
             except Exception as e:
-                return f"Error sending goal: {str(e)}"
+                return f"Error getting current pose: {str(e)}"
+            return self.send_pose_goal(x + dx, y + dy, z + dz)
 
         @tool
         def get_current_pose() -> str:
             """Get current pose of the robot end effector using TF2."""
             try:
-                # Get the transform from base_link to tool0
-                transform = self.tf_buffer.lookup_transform(
-                    'base_link',
-                    'tool0',
-                    rclpy.time.Time(),
-                    rclpy.duration.Duration(seconds=1.0)
-                )
-                x = transform.transform.translation.x
-                y = transform.transform.translation.y
-                z = transform.transform.translation.z
+                x, y, z = self.get_end_effector_position()
                 return f"Current end effector position - x: {x:.3f}, y: {y:.3f}, z: {z:.3f}"
             except Exception as e:
                 return f"Error getting current pose: {str(e)}"
@@ -143,6 +113,9 @@ class ROS2AIAgent(Node):
                 goal_msg = MoveGroup.Goal()
                 goal_msg.request = motion_request
                 goal_msg.planning_options.planning_scene_diff.robot_state.is_diff = True
+                # OMPL plans are random, so plan again if a plan fails or is invalid
+                goal_msg.planning_options.replan = True
+                goal_msg.planning_options.replan_attempts = 5
 
                 # Send goal asynchronously
                 self.get_logger().info(f'Moving to {target_name} position')
@@ -156,9 +129,13 @@ class ROS2AIAgent(Node):
         system_prompt = """You are a UR robot control assistant using MoveIt 2.
         You can control the robot using these commands:
         - move_to_pose(x, y, z): Move end effector to specified x,y,z coordinates
+        - move_relative(dx, dy, dz): Move end effector by dx, dy, dz meters from its current position
         - get_current_pose(): Get current position of the end effector
         - move_to_named_target(target_name): Move to predefined position (home, up)
-        
+
+        Never guess the current position. For motions relative to the current position,
+        such as "reduce z by 0.2 meters", use move_relative instead of computing coordinates.
+
         Return only the necessary actions and their results. e.g
         Human: Move the end effector to position x=0.5, y=0.0, z=0.5
         AI: Moving end effector to position x: 0.5, y: 0.0, z: 0.5
@@ -166,7 +143,7 @@ class ROS2AIAgent(Node):
         AI: Moving robot to home position"""
 
         # Setup the toolkit list
-        self.toolkit = [move_to_pose, get_current_pose, move_to_named_target]
+        self.toolkit = [move_to_pose, move_relative, get_current_pose, move_to_named_target]
 
         # Initialize Ollama running the qwen3:8b model (or your local model choice)
         self.llm = ChatOllama(model="qwen3:8b", temperature=0)
@@ -174,13 +151,63 @@ class ROS2AIAgent(Node):
         # Create the modern LangGraph-powered runtime agent executor graph
         self.agent_executor = create_agent(self.llm, tools=self.toolkit, system_prompt=system_prompt)
 
-        # Prompt topic subscriber
+        # Prompt topic subscriber. Prompts run on a background thread so TF updates and
+        # MoveIt action results keep arriving while the agent is working on a prompt.
         self.subscription = self.create_subscription(
             String,
             'prompt',
-            self.prompt_callback,
+            prompt_worker(self.prompt_callback),
             10
         )
+
+    def get_end_effector_position(self):
+        """Return the (x, y, z) position of tool0 in base_link using TF2."""
+        transform = self.tf_buffer.lookup_transform(
+            'base_link',
+            'tool0',
+            rclpy.time.Time(),
+            rclpy.duration.Duration(seconds=1.0)
+        )
+        translation = transform.transform.translation
+        return translation.x, translation.y, translation.z
+
+    def send_pose_goal(self, x, y, z):
+        """Plan and execute a motion of the end effector to x, y, z in base_link."""
+        x, y, z = float(x), float(y), float(z)
+        try:
+            # Create goal pose
+            goal_pose = PoseStamped()
+            goal_pose.header.frame_id = "base_link"
+            goal_pose.header.stamp = self.get_clock().now().to_msg()
+            goal_pose.pose.position = Point(x=x, y=y, z=z)
+            goal_pose.pose.orientation = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
+
+            # Create motion plan request
+            motion_request = MotionPlanRequest()
+            motion_request.workspace_parameters.header.frame_id = "base_link"
+            motion_request.workspace_parameters.header.stamp = self.get_clock().now().to_msg()
+            motion_request.group_name = "ur_manipulator"
+            motion_request.num_planning_attempts = 10
+            motion_request.allowed_planning_time = 5.0
+            motion_request.max_velocity_scaling_factor = 0.1
+            motion_request.max_acceleration_scaling_factor = 0.1
+            motion_request.goal_constraints = [self.create_pose_goal(goal_pose)]
+
+            # Create goal message
+            goal_msg = MoveGroup.Goal()
+            goal_msg.request = motion_request
+            goal_msg.planning_options.planning_scene_diff.robot_state.is_diff = True
+            # OMPL plans are random, so plan again if a plan fails or is invalid
+            goal_msg.planning_options.replan = True
+            goal_msg.planning_options.replan_attempts = 5
+
+            # Send goal asynchronously
+            self.get_logger().info(f'Sending goal position: x={x:.3f}, y={y:.3f}, z={z:.3f}')
+            future = self.move_action.send_goal_async(goal_msg)
+            future.add_done_callback(self.goal_response_callback)
+            return f"Sending motion command to position x: {x:.3f}, y: {y:.3f}, z: {z:.3f}"
+        except Exception as e:
+            return f"Error sending goal: {str(e)}"
 
     def create_pose_goal(self, pose_stamped):
         """Create pose goal constraints"""
@@ -242,15 +269,8 @@ class ROS2AIAgent(Node):
             self.get_logger().error(f'Error processing prompt: {str(e)}')
 
 def main(args=None):
-    rclpy.init(args=args)
-    node = ROS2AIAgent()
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
+    run_node(ROS2AIAgent, args)
+
 
 if __name__ == '__main__':
     main()

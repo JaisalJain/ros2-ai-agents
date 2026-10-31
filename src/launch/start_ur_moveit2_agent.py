@@ -9,11 +9,13 @@ def generate_launch_description():
     # Include the UR MoveIt2 simulation launch file
     ur_launch_file_dir = os.path.join(get_package_share_directory('ur_simulation_gz'), 'launch')
     
-    # Pass the 'initial_joint_controller' argument to match what MoveIt expects
+    # Simulate a UR5e and start the trajectory controller that MoveIt sends motions to
+    # (ur_moveit_config uses scaled_joint_trajectory_controller by default)
     ur_moveit_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([ur_launch_file_dir, '/ur_sim_moveit.launch.py']),
         launch_arguments={
-            'initial_joint_controller': 'joint_trajectory_controller'
+            'ur_type': 'ur5e',
+            'initial_joint_controller': 'scaled_joint_trajectory_controller'
         }.items()
     )
 
